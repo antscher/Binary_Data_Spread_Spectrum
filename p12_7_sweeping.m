@@ -5,7 +5,7 @@ signal_length = 2000;    % bits per trial
 Ntrials       = 200;     % Monte-Carlo trials per SNR point
 
 % (A) Sweep M with fixed Pn
-Pn_fixed = 2;                       % uniform noise power (Pn = a^2/3)
+Pn_Mlist  = [ 4 2 1 ];                      % uniform noise power (Pn = a^2/3)
 M_list   = [1 2 4 8 16 32 64];
 
 % (B) Sweep Pn with fixed M
@@ -13,13 +13,28 @@ M_fixed  = 16;
 Pn_list  = [8 4 2 1 0.5 0.25 0.125];
 
 %% ----- RUN SWEEPS (reusing your functions) -----
-[BER_A, SNRdB_A] = sweep_vary_M_with_your_funcs(M_list, Pn_fixed, signal_length, Ntrials);
+% Storage
+BER_all   = cell(length(Pn_Mlist),1);
+SNRdB_all = cell(length(Pn_Mlist),1);
+
+% ----- RUN SWEEPS -----
+for iPn = 1:length(Pn_Mlist)
+    Pn_fixed = Pn_Mlist(iPn);  % pick current noise power
+    [BER_A, SNRdB_A] = sweep_vary_M_with_your_funcs(M_list, Pn_fixed, signal_length, Ntrials);
+    BER_all{iPn}   = BER_A;
+    SNRdB_all{iPn} = SNRdB_A;
+end
 [BER_B, SNRdB_B] = sweep_vary_Pn_with_your_funcs(Pn_list, M_fixed, signal_length, Ntrials);
 
-%% ----- PLOTS -----
-figure; semilogy(SNRdB_A, BER_A, '-o','LineWidth',1.5); grid on;
-xlabel('SNR = 10log_{10}(M/P_n) [dB]'); ylabel('BER');
-title(sprintf('BER vs SNR (vary M, P_n=%.3g, %d trials, %d bits/trial)', Pn_fixed, Ntrials, signal_length));
+% ----- PLOTS -----
+figure; hold on; grid on;
+for iPn = 1:length(Pn_Mlist)
+    semilogy(SNRdB_all{iPn}, BER_all{iPn}, '-o','LineWidth',1.5);
+end
+xlabel('SNR = 10log_{10}(M/P_n) [dB]');
+ylabel('BER');
+legend(arrayfun(@(x) sprintf('P_n=%.3g', x), Pn_Mlist, 'UniformOutput', false));
+title(sprintf('BER vs SNR (vary M, %d trials, %d bits/trial)', Ntrials, signal_length))
 
 figure; semilogy(SNRdB_B, BER_B, '-s','LineWidth',1.5); grid on;
 xlabel('SNR = 10log_{10}(M/P_n) [dB]'); ylabel('BER');
