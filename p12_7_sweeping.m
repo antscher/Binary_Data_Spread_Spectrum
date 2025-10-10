@@ -5,7 +5,7 @@ signal_length = 2000;    % bits per trial
 Ntrials       = 200;     % Monte-Carlo trials per SNR point
 
 % (A) Sweep M with fixed Pn
-Pn_Mlist  = [ 4 2 1 ];                      % uniform noise power (Pn = a^2/3)
+Pn_Mlist  = [8 4 2 1 0.5 ];                      % uniform noise power (Pn = a^2/3)
 M_list   = [1 2 4 8 16 32 64];
 
 % (B) Sweep Pn with fixed M
@@ -31,10 +31,12 @@ figure; hold on; grid on;
 for iPn = 1:length(Pn_Mlist)
     semilogy(SNRdB_all{iPn}, BER_all{iPn}, '-o','LineWidth',1.5);
 end
+set(gca, 'YScale', 'log');       % logarithmic BER axis
 xlabel('SNR = 10log_{10}(M/P_n) [dB]');
-ylabel('BER');
-legend(arrayfun(@(x) sprintf('P_n=%.3g', x), Pn_Mlist, 'UniformOutput', false));
-title(sprintf('BER vs SNR (vary M, %d trials, %d bits/trial)', Ntrials, signal_length))
+ylabel('Bit Error Rate (BER)');
+ylim([1e-5 1]);                  % typical BER range
+legend(arrayfun(@(x) sprintf('P_n=%.3g', x), Pn_Mlist, 'UniformOutput', false), 'Location','southwest');
+title(sprintf('BER vs SNR (vary M, %d trials, %d bits/trial)', Ntrials, signal_length));
 
 figure; semilogy(SNRdB_B, BER_B, '-s','LineWidth',1.5); grid on;
 xlabel('SNR = 10log_{10}(M/P_n) [dB]'); ylabel('BER');
