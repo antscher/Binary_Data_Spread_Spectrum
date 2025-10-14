@@ -1,0 +1,419 @@
+%% -------- PARAMETERS --------
+signal_length = 20;        % number of bits for the single-run demo
+M  = 1000;                 % chips (samples) per bit for the single-run demo
+Pn = 1;                    % uniform-noise power, Pn = a^2/3
+A  = 10;                   % sinusoid amplitude for the single-run demo
+w0 = 0.17*pi;              % sinusoid rad/sample, 0 < w0 < pi
+
+% PN (LFSR)
+init = [1 1 1 1 1 0 1];    % 7-stage seed (non-zero)
+taps = [1 4 7];            % feedback taps (1 = leftmost/MSB)
+
+rng(1);                    % reproducibility
+
+% ---- switches ----
+RUN_SWEEPS  = true;        % set false to skip all BER sweeps
+FAST_SWEEPS = true;        % lighter params for Sweeps 1 & 2
+
+%% -------- TX --------
+bits      = binary_data_gen(signal_length);     % 0/1
+s_nrz     = modulator(M, bits);                 % ±1, length = signal_length*M
+pn        = pn_sequence_lfsr(signal_length, M, init, taps);  % ±1, same length
+tx_dsss   = s_nrz .* pn;                        % DSSS signal
+
+N = numel(tx_dsss);
+n = 0:N-1;
+
+%% -------- CHANNEL: uniform noise + sinusoid --------
+a  = sqrt(3*Pn);                                 % so that Pn = a^2/3
+w  = (2*rand(size(tx_dsss)) - 1) * a;            % uniform in [-a, a]
+tone = A * sin(w0 * n);                          % narrowband interferer
+rx  = tx_dsss + w + tone;                        % received
+
+%% -------- RX: despread, integrate-and-dump, decide --------
+despread = rx .* pn;
+
+demod_dsss    = sum( reshape( pad_to_multM(despread, M), M, [] ).', 2 ).'; % 1×Nbits
+bits_hat_dsss = demod_dsss >= 0;
+
+% BER with DSSS
+err_dsss = sum(bits_hat_dsss ~= bits);
+BER_dsss = err_dsss/numel(bits);
+
+%% -------- Baseline (no PN) for comparison --------
+rx_noPN      = s_nrz + w + tone;
+demod_noPN   = sum( reshape( pad_to_multM(rx_noPN, M), M, [] ).', 2 ).';
+bits_hat_noPN= demod_noPN >= 0;
+err_noPN     = sum(bits_hat_noPN ~= bits);
+BER_noPN     = err_noPN/numel(bits);
+
+fprintf('DSSS demo: errors=%d  BER=%.3g | No PN: errors=%d  BER=%.3g\n', ...
+        err_dsss, BER_dsss, err_noPN, BER_noPN);
+
+%% -------- Plots (compact) --------
+xBits  = 0:signal_length; 
+yBits  = [bits, bits(end)];
+figure; subplot(3,3,1); stairs(xBits, yBits, 'LineWidth',1); grid on;
+title('Input Binary'); xlabel('Bit index'); ylabel('0/1');
+
+xSamp  = 0:numel(s_nrz);
+subplot(3,3,2); stairs(xSamp, [s_nrz s_nrz(end)], 'LineWidth',1); grid on;
+title('NRZ (M repeats)'); xlabel('Sample'); ylabel('±1');
+
+subplot(3,3,3);
+stairs(xSamp, [pn pn(end)], 'LineWidth',1); grid on;
+title('PN chips (±1)'); xlabel('Sample'); ylabel('±1');
+
+subplot(3,3,4);
+stairs(xSamp(1:101), [pn(1:100) pn(100)], 'LineWidth',1); grid on;
+title('PN chips (±1) - First 100 samples'); xlabel('Sample'); ylabel('±1');
+
+subplot(3,3,5); stairs(xSamp, [tx_dsss tx_dsss(end)], 'LineWidth',1); grid on;
+title('DSSS = NRZ ⊙ PN'); xlabel('Sample'); ylabel('±1');
+
+subplot(3,3,6); stairs(xSamp(1:101), [tx_dsss(1:100) tx_dsss(100)], 'LineWidth',1); grid on;
+title('DSSS = NRZ ⊙ PN (first 100)'); xlabel('Sample'); ylabel('±1');
+
+subplot(3,3,7); plot(0:numel(rx)-1, rx, 'LineWidth',1); grid on;
+title('Channel: DSSS + uniform noise + tone'); xlabel('Sample'); ylabel('amp');
+
+subplot(3,3,8); plot(0:1999, rx(1:2000), 'LineWidth',1); grid on;
+title('Channel (first 2000 samples)'); xlabel('Sample'); ylabel('amp');
+
+K = min(2000, N);
+subplot(3,3,9);
+plot(0:K-1, tone(1:K), 'LineWidth',1); grid on;
+title('Interferer (first K samples)'); xlabel('Sample'); ylabel('Amplitude');
+finish_fig('Time-domain panels (3x3)');
+
+figure; plot(0:numel(despread)-1, despread, 'LineWidth',1); grid on;
+title('After Despread (rx ⊙ PN)'); xlabel('Sample'); ylabel('amp');
+finish_fig('Despread samples');
+
+figure; stairs(xBits, [bits_hat_dsss, bits_hat_dsss(end)]*2-1, 'LineWidth',1); grid on;
+title(sprintf('Recovered NRZ (DSSS): errors=%d', err_dsss));
+xlabel('Bit index'); ylabel('±1');
+finish_fig('Recovered NRZ');
+
+%% -------- Spectrum demo: NRZ vs DSSS (current M) --------
+Nfft = 2^nextpow2(min(262144, numel(s_nrz)));
+[wNRZ_dB, fN]   = mag_spectrum_dB(s_nrz, Nfft);
+[wDSSS_dB, fN2] = mag_spectrum_dB(tx_dsss, Nfft);
+
+figure;
+subplot(2,1,1);
+plot(fN, wNRZ_dB, 'LineWidth',1); hold on;
+plot(fN2, wDSSS_dB, 'LineWidth',1);
+grid on; xlabel('Normalized frequency (cycles/sample)');
+ylabel('Magnitude (dB, normalized)');
+title(sprintf('Spectrum: NRZ vs DSSS (M = %d chips/bit)', M));
+legend('NRZ (no PN)', 'DSSS (NRZ × PN)', 'Location', 'southwest');
+
+subplot(2,1,2);
+plot(fN, wNRZ_dB, 'LineWidth',1); hold on;
+plot(fN2, wDSSS_dB, 'LineWidth',1);
+grid on; xlabel('Normalized frequency (cycles/sample)');
+ylabel('Magnitude (dB, normalized)');
+title('Zoom near DC (NRZ narrow vs DSSS flat)');
+xlim([-0.10 0.10]);
+legend('NRZ (no PN)', 'DSSS', 'Location', 'southwest');
+finish_fig('Spectrum: NRZ vs DSSS');
+
+%% -------- Effect of M: small vs large M --------
+Ms_demo = [50, 1000];
+colors  = lines(numel(Ms_demo));
+figure;
+for i = 1:numel(Ms_demo)
+    Mi   = Ms_demo(i);
+    s0   = modulator(Mi, bits);
+    pn0  = pn_sequence_lfsr(numel(bits), Mi, init, taps);
+    x0   = s0 .* pn0;
+    [W_dB, fN_demo] = mag_spectrum_dB(x0, 2^nextpow2(min(262144,numel(x0))));
+    plot(fN_demo, W_dB, 'LineWidth',1, 'Color', colors(i,:)); hold on;
+end
+grid on; xlabel('Normalized frequency (cycles/sample)');
+ylabel('Magnitude (dB, normalized)');
+title('DSSS spectrum vs M (larger M → wider/flatter)');
+legend(arrayfun(@(m) sprintf('DSSS, M=%d', m), Ms_demo, 'UniformOutput', false), ...
+       'Location','southwest');
+finish_fig('DSSS spectrum for different M');
+
+%% -------- Despreading collapses spectrum --------
+[Wrx_dB, fNrx]  = mag_spectrum_dB(rx, Nfft);
+[Wde_dB, fNde]  = mag_spectrum_dB(despread, Nfft);
+figure;
+plot(fNrx, Wrx_dB, 'LineWidth',1); hold on;
+plot(fNde, Wde_dB, 'LineWidth',1);
+grid on; xlabel('Normalized frequency (cycles/sample)');
+ylabel('Magnitude (dB, normalized)');
+title('Before vs After Despreading (same PN)');
+legend('Received (spread + noise + tone)', 'Despread (collapse near baseband)', ...
+       'Location','southwest');
+finish_fig('Before vs After Despreading');
+
+%% ---------- SWEEPS (with smart plotting) ----------
+if RUN_SWEEPS
+    Ms        = [50 100 500 1000];
+    max_chips = 2e6;
+    init_sw   = init; taps_sw = taps;
+
+    % lighter params for Sweeps 1 & 2 (fast visualisation)
+    if FAST_SWEEPS
+        Nfreq   = 4;
+        Lbits   = 800;
+        Ntrials = 40;
+    else
+        Nfreq   = 10;
+        Lbits   = 2000;
+        Ntrials = 200;
+    end
+    BER_floor_plot = 0.5/(Lbits*Ntrials);
+
+    %% === Sweep 1: A = M (stress test) ===
+    fprintf('--- Sweep 1: BER vs M (A = M) ---\n');
+    BER_dsss_Am = zeros(size(Ms));  BER_noPN_Am = zeros(size(Ms));
+    for k = 1:numel(Ms)
+        Mk    = Ms(k);
+        Ak    = 1.0 * Mk;
+        Nbits = floor(max_chips / Mk);
+        [BER_dsss_Am(k), BER_noPN_Am(k)] = run_one_avg(Nbits, Mk, 1, Ak, init_sw, taps_sw, Nfreq);
+        fprintf('  [A=M]  (%d/%d) M=%4d  ->  BER_DSSS=%.4f  BER_noPN=%.4f\n', ...
+                k, numel(Ms), Mk, BER_dsss_Am(k), BER_noPN_Am(k));
+        drawnow('limitrate');
+    end
+    B1 = max(BER_dsss_Am, BER_floor_plot);
+    R1 = max(BER_noPN_Am, BER_floor_plot);
+    ylo = max(min([B1 R1])/1.5, 1e-5);  yhi = min(max([B1 R1])*1.5, 1);
+    figure; semilogy(Ms, B1, '-o', Ms, R1, '-s'); grid on;
+    xlabel('M (chips/bit)'); ylabel('BER'); title('BER vs M (A = M, P_n = 1)');
+    legend('DSSS (with PN)','No PN','Location','southwest'); ylim([ylo, yhi]);
+    finish_fig('BER vs M (A=M)');
+
+    %% === Sweep 2: A = 50 (fixed tone) ===
+    fprintf('--- Sweep 2: BER vs M (A = 50) ---\n');
+    A_fixed     = 50;
+    BER_dsss_Af = zeros(size(Ms));  BER_noPN_Af = zeros(size(Ms));
+    for k = 1:numel(Ms)
+        Mk    = Ms(k);
+        Nbits = floor(max_chips / Mk);
+        [BER_dsss_Af(k), BER_noPN_Af(k)] = run_one_avg(Nbits, Mk, 1, A_fixed, init_sw, taps_sw, Nfreq);
+        fprintf('  [A=50] (%d/%d) M=%4d  ->  BER_DSSS=%.4f  BER_noPN=%.4f\n', ...
+                k, numel(Ms), Mk, BER_dsss_Af(k), BER_noPN_Af(k));
+        drawnow('limitrate');
+    end
+    B2 = max(BER_dsss_Af, BER_floor_plot);
+    R2 = max(BER_noPN_Af, BER_floor_plot);
+    ylo = max(min([B2 R2])/1.5, 1e-5);  yhi = min(max([B2 R2])*1.5, 1);
+    figure; semilogy(Ms, B2, '-o', Ms, R2, '-s'); grid on;
+    xlabel('M (chips/bit)'); ylabel('BER'); title('BER vs M (A = 50, P_n = 1)');
+    legend('DSSS (with PN)','No PN','Location','southwest'); ylim([ylo, yhi]);
+    finish_fig('BER vs M (A=50)');
+
+%% ===== Sweep 3: BER vs SNR (vary M, multi-Pn, with tone) =====
+fprintf('--- Sweep 3: BER vs SNR (vary M, multi-Pn, with tone) ---\n');
+
+% heavier MC here for smooth curves but keep runtime reasonable
+Lbits_snr   = 2000;      % bits per trial
+Ntrials_snr = 100;       % trials per point
+Nfreq_snr   = 1;         % one tone freq; smoothing comes from per-bit phase
+
+Ms_sweep    = [1 2 4 8 16 32 64 128 256 512 1024];  % <= 1024 as requested
+%Pn_set      = [0.5 1 2 4 8];                        % multiple noise powers
+A_fixed     = 6.40;                                 % constant tone amplitude
+w0_mode     = 'midband';                            % tone relative to chip rate
+% Desired color mapping:
+% blue -> Pn=8, orange -> Pn=4, yellow -> Pn=2, purple -> Pn=1, green -> Pn=0.5
+Pn_set = [8 4 2 1 0.5];
+cmap = [ 0.0000 0.4470 0.7410;   % blue   (Pn=8)
+         0.8500 0.3250 0.0980;   % orange (Pn=4)
+         0.9290 0.6940 0.1250;   % yellow (Pn=2)
+         0.4940 0.1840 0.5560;   % purple (Pn=1)
+         0.4660 0.6740 0.1880 ]; % green  (Pn=0.5)
+
+
+BER_floor = 0.5/(Lbits_snr*Ntrials_snr);            % plotting floor
+%cmap = lines(numel(Pn_set));
+
+figure('Name','BER vs SNR — DSSS with tone (fixed A, vary M, multi-P_n)');
+hold on; grid on; box on;
+leg = cell(0,1);
+
+for ip = 1:numel(Pn_set)
+    Pn_cur = Pn_set(ip);
+    fprintf('  Pn=%g (%d/%d)\n', Pn_cur, ip, numel(Pn_set));
+
+    SNRdB = zeros(size(Ms_sweep));
+    BER   = zeros(size(Ms_sweep));
+
+    for k = 1:numel(Ms_sweep)
+        Mcur = Ms_sweep(k);
+        switch w0_mode
+            case 'midband'
+                w0 = (2*pi/Mcur) * 1.5;   % ~mid-band vs chip rate
+            otherwise
+                w0 = (2*pi/Mcur) * 1.5;
+        end
+
+        % SNR on x-axis. With tone present, total disturbance power = Pn + A^2/2
+        SNRdB(k) = 10*log10( Mcur / (Pn_cur + (A_fixed^2)/2) );
+
+        % Monte-Carlo: random tone phase PER BIT for smoothness
+        BER(k) = ber_dsss_tone_avg_smooth(Mcur, Pn_cur, A_fixed, w0, ...
+                    Lbits_snr, Ntrials_snr, init, taps);
+
+        fprintf('    -> M=%-4d (%2d/%2d)  SNR=%.2f dB  BER=%.4g\n', ...
+                Mcur, k, numel(Ms_sweep), SNRdB(k), BER(k));
+        drawnow('limitrate');
+    end
+
+    % sort by SNR for a proper left-to-right curve and apply BER floor
+   [SNRdB, idx] = sort(SNRdB);
+BERplot = max(BER(idx), max(BER_floor, realmin));
+semilogy(SNRdB, BERplot, '-o', 'LineWidth', 1.5, 'Color', cmap(ip,:));
+set(gca,'YScale','log');   % force log scale
+
+    leg{end+1} = sprintf('P_n = %g', Pn_cur);
+end
+
+ylim([BER_floor/5, 1]);
+% after all the semilogy(...) calls, before finish_fig(...)
+xlabel('$\mathrm{SNR}=10\log_{10}\!\big(M/(P_n + A^2/2)\big)\ \mathrm{[dB]}$', ...
+       'Interpreter','latex');
+ylabel('Bit Error Rate (BER)', 'Interpreter','latex');
+legend(leg, 'Location','southwest', 'Interpreter','latex');
+
+
+finish_fig('BER vs SNR (multi-Pn, tone, vary M)');
+
+
+
+end  % <-- closes RUN_SWEEPS
+
+%% ====== FUNCTIONS ======
+function binary_signal = binary_data_gen(signal_length)
+    binary_signal = randi([0, 1],1, signal_length);
+end
+
+function mod_signal = modulator(M, binary_signal)
+    mod_signal = repelem(2*binary_signal - 1, M);
+end
+
+% Pad a row vector with zeros to make its length a multiple of M.
+function y = pad_to_multM(x, M)
+    L = numel(x); remL = mod(L, M);
+    if remL == 0, y = x; else, y = [x, zeros(1, M - remL)]; end
+end
+
+function pn = pn_sequence_lfsr(num_bits, chips_per_bit, init, taps)
+    if all(init == 0), error('init state must be nonzero.');
+    end
+    N = num_bits * chips_per_bit;
+    reg = logical(init(:).'); chips01 = false(1, N);
+    for k = 1:N
+        chips01(k) = reg(end);                 % output = rightmost stage
+        fb = mod(sum(reg(taps)), 2);           % XOR of taps
+        reg = [logical(fb) reg(1:end-1)];      % shift in feedback on left
+    end
+    pn = 2*double(chips01) - 1;                % map {0,1} -> {-1,+1}
+end
+
+function [BER_dsss, BER_noPN] = run_one(Nbits, M, Pn, A, w0, init, taps)
+    % bits & NRZ
+    bits  = randi([0 1], 1, Nbits);
+    s_nrz = repelem(2*bits-1, M);
+
+    % PN & spreading
+    pn  = pn_sequence_lfsr(Nbits, M, init, taps);
+    tx  = s_nrz .* pn;
+
+    % channel: uniform noise + sinusoid with random phase (per packet)
+    a    = sqrt(3*Pn);
+    w    = (2*rand(size(tx)) - 1) * a;
+    n    = 0:numel(tx)-1;
+    phi  = 2*pi*rand;
+    tone = A * sin(w0*n + phi);
+    rx   = tx + w + tone;
+
+    % despread + integrate & dump
+    despread  = rx .* pn;
+    y_dsss    = sum(reshape(pad_to_multM(despread, M), M, []).', 2).';
+    bhat_dsss = (y_dsss >= 0);
+    BER_dsss  = mean(bhat_dsss ~= bits);
+
+    % baseline: no PN
+    rx0   = s_nrz + w + tone;
+    y0    = sum(reshape(pad_to_multM(rx0, M), M, []).', 2).';
+    bhat0 = (y0 >= 0);
+    BER_noPN = mean(bhat0 ~= bits);
+end
+
+function [BERd_avg, BER0_avg] = run_one_avg(Nbits, M, Pn, A, init, taps, Nfreq)
+    BERd = 0; BER0 = 0;
+    for r = 1:Nfreq
+        % tone frequency drawn in ~[π/M, 2π/M]
+        w0 = (2*pi/M) * (0.5 + 0.5*rand);
+        [bd, b0] = run_one(Nbits, M, Pn, A, w0, init, taps);
+        BERd = BERd + bd;  BER0 = BER0 + b0;
+    end
+    BERd_avg = BERd / Nfreq;  BER0_avg = BER0 / Nfreq;
+end
+
+%% ----- Windowed magnitude spectrum (dB, normalized) -----
+function [W_dB, f_norm] = mag_spectrum_dB(x, Nfft)
+    x = x(:);
+    N = numel(x);
+    w = hann(N, 'periodic');
+    X = fft(x .* w, Nfft);
+    mag = abs(fftshift(X));
+    mag = mag / max(mag + eps);
+    W_dB = 20*log10(mag + eps);
+    f_norm = ((-Nfft/2):(Nfft/2-1))' / Nfft;
+end
+
+%% ----- Smooth BER with tone: randomize jammer phase PER BIT -----
+function BER = ber_dsss_tone_avg_smooth(M, Pn, A, w0, L, Ntrials, init, taps)
+    % Precompute PN once for this (L,M)
+    pn = pn_sequence_lfsr(L, M, init, taps);
+    a  = sqrt(3*Pn);      % uniform-noise scale so Pn = a^2/3
+    total_err = 0;
+
+    for t = 1:Ntrials
+        % Bits & NRZ (chips)
+        bits = randi([0 1], 1, L);
+        s    = repelem(2*bits-1, M);
+        tx   = s .* pn;
+
+        % ----- Jammer: sinusoid with RANDOM PHASE PER BIT -----
+        % This de-coheres the tone to avoid jagged swings.
+        Nchips = numel(tx);
+        tone   = zeros(1, Nchips);
+        for b = 0:L-1
+            idx = b*M + (0:(M-1));
+            phi = 2*pi*rand;                      % new phase every bit
+            tone(idx+1) = A * sin(w0*(idx) + phi);
+        end
+
+        % Channel
+        wv  = (2*rand(1, Nchips) - 1) * a;
+        rx  = tx + wv + tone;
+
+        % Despread & integrate
+        de  = rx .* pn;
+        dep = [de, zeros(1, mod(-numel(de), M))];
+        y   = sum(reshape(dep, M, []).', 2).';
+
+        % Detect & accumulate errors
+        bh  = (y >= 0);
+        total_err = total_err + sum(bh ~= bits);
+    end
+
+    BER = total_err / (L*Ntrials);
+end
+
+%% ----- Figure flush helper -----
+function finish_fig(tag)
+    drawnow('limitrate'); shg;
+    try fnum = gcf().Number; catch, fnum = NaN; end
+    fprintf('[%s] Figure "%s" rendered (Fig# %g)\n', ...
+            datestr(now,'HH:MM:SS'), tag, fnum);
+end
